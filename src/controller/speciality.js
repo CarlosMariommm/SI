@@ -1,0 +1,1 @@
+import Especialidades from "../models/especialidades.js"
