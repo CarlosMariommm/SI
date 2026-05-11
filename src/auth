@@ -1,0 +1,556 @@
+// controllers/auth.controller.js
+
+import Estudiante from "../models/Estudiante.js";
+import Profesor from "../models/Profesor.js";
+
+import bcrypt from "bcryptjs";
+import jwt from "jsonwebtoken";
+
+import { transporter } from "../config/nodemailer.js";
+
+
+// ===============================
+// REGISTER STUDENT
+// ===============================
+
+export const registerStudent = async (req, res) => {
+
+    try {
+
+        const {
+            name,
+            lastName,
+            email,
+            password,
+            birthdate,
+            speciality_id,
+            carnet,
+            phone
+        } = req.body;
+
+        // Verificar email
+        const emailExists = await Estudiante.findOne({ email });
+
+        if (emailExists) {
+
+            return res.status(400).json({
+                message: "El email ya existe"
+            });
+        }
+
+        // Verificar carnet
+        const carnetExists = await Estudiante.findOne({ carnet });
+
+        if (carnetExists) {
+
+            return res.status(400).json({
+                message: "El carnet ya existe"
+            });
+        }
+
+        // Encriptar contraseña
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        // Código de verificación
+        const verificationCode = Math.floor(
+            100000 + Math.random() * 900000
+        ).toString();
+
+        // Crear estudiante
+        const newStudent = new Estudiante({
+            name,
+            lastName,
+            email,
+            password: hashedPassword,
+            birthdate,
+            speciality_id,
+            carnet,
+            phone,
+            verificationCode
+        });
+
+        await newStudent.save();
+
+        // Enviar correo
+        await transporter.sendMail({
+
+            from: process.env.EMAIL_USER,
+
+            to: email,
+
+            subject: "Verificación de correo",
+
+            text: `Tu código de verificación es: ${verificationCode}`
+        });
+
+        res.status(201).json({
+            message: "Estudiante registrado correctamente"
+        });
+
+    } catch (error) {
+
+        res.status(500).json({
+            message: "Error registrando estudiante",
+            error
+        });
+    }
+};
+
+
+// ===============================
+// REGISTER TEACHER
+// ===============================
+
+export const registerTeacher = async (req, res) => {
+
+    try {
+
+        const {
+            name,
+            lastName,
+            email,
+            password,
+            hireDate,
+            phone
+        } = req.body;
+
+        const emailExists = await Profesor.findOne({ email });
+
+        if (emailExists) {
+
+            return res.status(400).json({
+                message: "El email ya existe"
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        const verificationCode = Math.floor(
+            100000 + Math.random() * 900000
+        ).toString();
+
+        const newTeacher = new Profesor({
+            name,
+            lastName,
+            email,
+            password: hashedPassword,
+            hireDate,
+            phone,
+            verificationCode
+        });
+
+        await newTeacher.save();
+
+        await transporter.sendMail({
+
+            from: process.env.EMAIL_USER,
+
+            to: email,
+
+            subject: "Verificación de correo",
+
+            text: `Tu código de verificación es: ${verificationCode}`
+        });
+
+        res.status(201).json({
+            message: "Profesor registrado correctamente"
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// VERIFY STUDENT
+// ===============================
+
+export const verifyStudent = async (req, res) => {
+
+    try {
+
+        const { email, code } = req.body;
+
+        const student = await Estudiante.findOne({ email });
+
+        if (!student) {
+
+            return res.status(404).json({
+                message: "Estudiante no encontrado"
+            });
+        }
+
+        if (student.verificationCode != code) {
+
+            return res.status(400).json({
+                message: "Código incorrecto"
+            });
+        }
+
+        student.isVerified = true;
+
+        student.verificationCode = null;
+
+        await student.save();
+
+        res.status(200).json({
+            message: "Correo verificado correctamente"
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// VERIFY TEACHER
+// ===============================
+
+export const verifyTeacher = async (req, res) => {
+
+    try {
+
+        const { email, code } = req.body;
+
+        const teacher = await Profesor.findOne({ email });
+
+        if (!teacher) {
+
+            return res.status(404).json({
+                message: "Profesor no encontrado"
+            });
+        }
+
+        if (teacher.verificationCode != code) {
+
+            return res.status(400).json({
+                message: "Código incorrecto"
+            });
+        }
+
+        teacher.isVerified = true;
+
+        teacher.verificationCode = null;
+
+        await teacher.save();
+
+        res.status(200).json({
+            message: "Correo verificado correctamente"
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// LOGIN STUDENT
+// ===============================
+
+export const loginStudent = async (req, res) => {
+
+    try {
+
+        const { email, password } = req.body;
+
+        const studentFound = await Estudiante.findOne({ email });
+
+        if (!studentFound) {
+
+            return res.status(404).json({
+                message: "Estudiante no encontrado"
+            });
+        }
+
+        // Cuenta bloqueada
+        if (
+            studentFound.timeOut &&
+            studentFound.timeOut > Date.now()
+        ) {
+
+            return res.status(403).json({
+                message: "Cuenta bloqueada temporalmente"
+            });
+        }
+
+        // Comparar password
+        const isMatch = await bcrypt.compare(
+            password,
+            studentFound.password
+        );
+
+        // Contraseña incorrecta
+        if (!isMatch) {
+
+            studentFound.loginAttempts += 1;
+
+            // Bloquear tras 3 intentos
+            if (studentFound.loginAttempts >= 3) {
+
+                studentFound.timeOut =
+                    new Date(Date.now() + 5 * 60 * 1000);
+
+                await studentFound.save();
+
+                return res.status(403).json({
+                    message:
+                        "Cuenta bloqueada por 5 minutos"
+                });
+            }
+
+            await studentFound.save();
+
+            return res.status(401).json({
+                message: "Contraseña incorrecta",
+                attempts: studentFound.loginAttempts
+            });
+        }
+
+        // Verificar correo
+        if (!studentFound.isVerified) {
+
+            return res.status(401).json({
+                message: "Debes verificar tu correo"
+            });
+        }
+
+        // Reiniciar intentos
+        studentFound.loginAttempts = 0;
+        studentFound.timeOut = null;
+
+        await studentFound.save();
+
+        // Token
+        const token = jwt.sign(
+            {
+                id: studentFound._id,
+                role: "student"
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: "1d"
+            }
+        );
+
+        // Cookie
+        res.cookie("token", token, {
+            httpOnly: true,
+            secure: false,
+            sameSite: "lax"
+        });
+
+        res.status(200).json({
+            message: "Login exitoso",
+            token
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// LOGIN TEACHER
+// ===============================
+
+export const loginTeacher = async (req, res) => {
+
+    try {
+
+        const { email, password } = req.body;
+
+        const teacherFound = await Profesor.findOne({ email });
+
+        if (!teacherFound) {
+
+            return res.status(404).json({
+                message: "Profesor no encontrado"
+            });
+        }
+
+        const isMatch = await bcrypt.compare(
+            password,
+            teacherFound.password
+        );
+
+        if (!isMatch) {
+
+            return res.status(401).json({
+                message: "Contraseña incorrecta"
+            });
+        }
+
+        if (!teacherFound.isVerified) {
+
+            return res.status(401).json({
+                message: "Debes verificar tu correo"
+            });
+        }
+
+        const token = jwt.sign(
+            {
+                id: teacherFound._id,
+                role: "teacher"
+            },
+            process.env.JWT_SECRET,
+            {
+                expiresIn: "1d"
+            }
+        );
+
+        res.cookie("token", token, {
+            httpOnly: true,
+            secure: false,
+            sameSite: "lax"
+        });
+
+        res.status(200).json({
+            message: "Login exitoso",
+            token
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// LOGOUT
+// ===============================
+
+export const logout = (req, res) => {
+
+    res.clearCookie("token");
+
+    res.status(200).json({
+        message: "Sesión cerrada correctamente"
+    });
+};
+
+
+// ===============================
+// FORGOT PASSWORD STUDENT
+// ===============================
+
+export const forgotPasswordStudent = async (req, res) => {
+
+    try {
+
+        const { email } = req.body;
+
+        const student = await Estudiante.findOne({ email });
+
+        if (!student) {
+
+            return res.status(404).json({
+                message: "Estudiante no encontrado"
+            });
+        }
+
+        const resetCode = Math.floor(
+            100000 + Math.random() * 900000
+        ).toString();
+
+        student.resetCode = resetCode;
+
+        student.resetCodeExpires =
+            Date.now() + 10 * 60 * 1000;
+
+        await student.save();
+
+        await transporter.sendMail({
+
+            from: process.env.EMAIL_USER,
+
+            to: email,
+
+            subject: "Recuperación de contraseña",
+
+            text: `Tu código de recuperación es: ${resetCode}`
+        });
+
+        res.status(200).json({
+            message: "Código enviado al correo"
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
+
+
+// ===============================
+// RESET PASSWORD STUDENT
+// ===============================
+
+export const resetPasswordStudent = async (req, res) => {
+
+    try {
+
+        const {
+            email,
+            code,
+            newPassword
+        } = req.body;
+
+        const student = await Estudiante.findOne({ email });
+
+        if (!student) {
+
+            return res.status(404).json({
+                message: "Estudiante no encontrado"
+            });
+        }
+
+        // Verificar código
+        if (student.resetCode != code) {
+
+            return res.status(400).json({
+                message: "Código incorrecto"
+            });
+        }
+
+        // Verificar expiración
+        if (
+            student.resetCodeExpires < Date.now()
+        ) {
+
+            return res.status(400).json({
+                message: "Código expirado"
+            });
+        }
+
+        // Encriptar nueva contraseña
+        const hashedPassword = await bcrypt.hash(
+            newPassword,
+            10
+        );
+
+        student.password = hashedPassword;
+
+        student.resetCode = null;
+
+        student.resetCodeExpires = null;
+
+        await student.save();
+
+        res.status(200).json({
+            message: "Contraseña actualizada"
+        });
+
+    } catch (error) {
+
+        res.status(500).json(error);
+    }
+};
